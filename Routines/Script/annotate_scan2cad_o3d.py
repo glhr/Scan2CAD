@@ -3,7 +3,7 @@ import sys
 assert sys.version_info >= (3, 5)
 
 import numpy as np
-import pathlib
+from pathlib import Path
 import os
 import shutil
 import glob
@@ -89,16 +89,13 @@ def decompose_mat4(M):
     t = M[0:3, 3]
     return t, q, s
 
+def parse_scan2d_dataset(scan2d_folder, output_dir):
+    params_json = Path(scan2d_folder) / "./Parameters.json"
+    params = JSONHelper.read(params_json)  # <-- read parameter file (contains dataset paths)
 
-if __name__ == '__main__':
-    params = JSONHelper.read("./Parameters.json")  # <-- read parameter file (contains dataset paths)
-    with open("./bbox.ply", 'rb') as read_file:
-        mesh_bbox = PlyData.read(read_file)
-    assert mesh_bbox, "Could not read bbox template."
-
-    filename_json = "./full_annotations.json"
+    filename_json = Path(scan2d_folder) / "full_annotations.json"
     if not os.path.exists(filename_json):
-        filename_json = "./example_annotation.json"
+        filename_json = Path(scan2d_folder) / "example_annotation.json"
 
     for r in JSONHelper.read(filename_json):
         id_scan = r["id_scan"]
@@ -106,12 +103,12 @@ if __name__ == '__main__':
             continue
 
         outdir = os.path.abspath(opt.out + "/" + id_scan)
-        pathlib.Path(outdir).mkdir(parents=True, exist_ok=True)
+        Path(outdir).mkdir(parents=True, exist_ok=True)
 
         ## read & transform scan
-        scan_file = params["scannet"] + "/" + id_scan + "/" + id_scan + "_vh_clean_2.ply"
+        scan_file = Path(scan2d_folder) / Path(params["scannet"]) / id_scan / (id_scan + "_vh_clean_2.ply")
         Mscan = make_M_from_tqs(r["trs"]["translation"], r["trs"]["rotation"], r["trs"]["scale"])
-        scan = o3d.io.read_point_cloud(scan_file)
+        scan = o3d.io.read_point_cloud(str(scan_file))
         scan.transform(Mscan)
 
         ray_casting_scene = o3d.t.geometry.RaycastingScene()
@@ -127,12 +124,12 @@ if __name__ == '__main__':
             catid_cad = model["catid_cad"]
 
             ## read cad file
-            cad_file = params["shapenet"] + "/" + catid_cad + "/" + id_cad + "/models/model_normalized.obj"
-            mesh = o3d.io.read_triangle_mesh(cad_file)
+            cad_file = Path(scan2d_folder) / Path(params["shapenet"]) / catid_cad / (id_cad + "/models/model_normalized.obj")
+            mesh = o3d.io.read_triangle_mesh(str(cad_file))
             Mcad = make_M_from_tqs(t, q, s)
             mesh.transform(Mcad)
             color = [50, 200, 50]
-            mesh.paint_uniform_color(np.array(color)/100)
+            mesh.paint_uniform_color(np.array(color) / 100)
 
             ## add cad to raycasting
             mesh_legacy = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
@@ -140,13 +137,16 @@ if __name__ == '__main__':
 
             ## add bounding box
             meshbox = o3d.geometry.OrientedBoundingBox.create_from_points(o3d.utility.Vector3dVector(mesh.vertices))
-            meshbox.color = [0,0,0]
+            meshbox.color = [0, 0, 0]
 
             to_draw.extend([mesh, meshbox])
 
     o3d.visualization.draw_geometries(to_draw)
 
-    distances_to_cad_model = ray_casting_scene.compute_signed_distance(np.asarray(scan.points)).numpy()
+    distances_to_cad_model = ray_casting_scene.compute_signed_distance(np.asarray(scan.points, dtype=np.float32)).numpy()
+
+if __name__ == '__main__':
+    parse_scan2d_dataset(scan2d_folder="other_data/Scan2CAD/Routines/Script", output_dir=opt.out)
 
 
 
