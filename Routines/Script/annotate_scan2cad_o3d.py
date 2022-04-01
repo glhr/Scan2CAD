@@ -108,33 +108,16 @@ if __name__ == '__main__':
         outdir = os.path.abspath(opt.out + "/" + id_scan)
         pathlib.Path(outdir).mkdir(parents=True, exist_ok=True)
 
+        ## read & transform scan
         scan_file = params["scannet"] + "/" + id_scan + "/" + id_scan + "_vh_clean_2.ply"
         Mscan = make_M_from_tqs(r["trs"]["translation"], r["trs"]["rotation"], r["trs"]["scale"])
-        assert os.path.exists(scan_file), scan_file + " does not exist."
+        scan = o3d.io.read_point_cloud(scan_file)
+        scan.transform(Mscan)
 
-        with open(scan_file, 'rb') as read_file:
-            mesh_scan = PlyData.read(read_file)
+        ray_casting_scene = o3d.t.geometry.RaycastingScene()
 
-        points = []
-        for v in mesh_scan["vertex"]:
-            v1 = np.array([v[0], v[1], v[2], 1])
-            v1 = np.dot(Mscan, v1)
+        to_draw = [scan]
 
-            v[0] = v1[0]
-            v[1] = v1[1]
-            v[2] = v1[2]
-            # <-- ignore normals etc.
-            # print(v)
-            points.append([v[0], v[1], v[2]])
-        points = np.array(points)
-
-        with open(outdir + "/scan.ply", mode='wb') as f:
-            PlyData(mesh_scan).write(f)
-
-        faces_bbox = []
-        verts_bbox = []
-        faces_cad = []
-        verts_cad = []
         for model in r["aligned_models"]:
             t = model["trs"]["translation"]
             q = model["trs"]["rotation"]
@@ -143,80 +126,28 @@ if __name__ == '__main__':
             id_cad = model["id_cad"]
             catid_cad = model["catid_cad"]
 
-            print(model["bbox"])
-            Mbbox = calc_Mbbox(model)
-            # for f in mesh_bbox["face"]:
-            #     faces_bbox.append((np.array(f[0]) + len(verts_bbox),))
-            # for v in mesh_bbox["vertex"]:
-            #     v1 = np.array([v[0], v[1], v[2], 1])
-            #     v1 = np.dot(Mbbox, v1)[0:3]
-            #     verts_bbox.append(tuple(v1) + (50, 50, 200))
-
-            bbox_ref = [[-1,-1,-1], [-1,1,-1], [-1,1,1], [-1,-1,1], [1,1,1], [1,-1,-1], [1,-1,1], [-1,-1,1]]
-            verts_bbox = []
-            for v in bbox_ref:
-                v1 = np.array([v[0], v[1], v[2], 1])
-                v1 = np.dot(Mbbox, v1)[0:3]
-                verts_bbox.append(v1)
-            #verts_bbox = np.array(verts_bbox)
-
-            point_cloud = o3d.geometry.PointCloud()
-            print(points[:10])
-            point_cloud.points = o3d.utility.Vector3dVector(points)
-            #box = o3d.geometry.AxisAlignedBoundingBox(min_bound=np.min(bbox_verts,axis=0), max_bound=np.max(bbox_verts,axis=0))
-            box = o3d.geometry.OrientedBoundingBox.create_from_points(o3d.utility.Vector3dVector(verts_bbox))
-            o3d.visualization.draw_geometries([point_cloud,box])
-
+            ## read cad file
             cad_file = params["shapenet"] + "/" + catid_cad + "/" + id_cad + "/models/model_normalized.obj"
-            cad_mesh = pywavefront.Wavefront(cad_file, collect_faces=True, parse=True)
+            mesh = o3d.io.read_triangle_mesh(cad_file)
             Mcad = make_M_from_tqs(t, q, s)
+            mesh.transform(Mcad)
+            color = [50, 200, 50]
+            mesh.paint_uniform_color(np.array(color)/100)
 
-            # print("CAD", cad_file, "n-verts", len(cad_mesh.vertices))
-            color = (50, 200, 50)
-            faces = []
-            verts = []
-            for name, mesh in cad_mesh.meshes.items():
-                for f in mesh.faces:
-                    faces.append((np.array(f[0:3]) + len(verts_cad),))
-                    v0 = cad_mesh.vertices[f[0]]
-                    v1 = cad_mesh.vertices[f[1]]
-                    v2 = cad_mesh.vertices[f[2]]
-                    if len(v0) == 3:
-                        cad_mesh.vertices[f[0]] = v0 + color
-                    if len(v1) == 3:
-                        cad_mesh.vertices[f[1]] = v1 + color
-                    if len(v2) == 3:
-                        cad_mesh.vertices[f[2]] = v2 + color
-            faces_cad.extend(faces)
+            ## add cad to raycasting
+            mesh_legacy = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
+            ray_casting_scene.add_triangles(mesh_legacy)
 
-            for v in cad_mesh.vertices[:]:
-                if len(v) != 6:
-                    v = (0, 0, 0) + (0, 0, 0)
-                vi = tuple(np.dot(Mcad, np.array([v[0], v[1], v[2], 1]))[0:3])
-                ci = tuple(v[3:6])
-                verts.append(vi + ci)
-            verts_cad.extend(verts)
+            ## add bounding box
+            meshbox = o3d.geometry.OrientedBoundingBox.create_from_points(o3d.utility.Vector3dVector(mesh.vertices))
+            meshbox.color = [0,0,0]
 
-    verts_cad = np.asarray(verts_cad, dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4'), ('red', 'u1'), ('green', 'u1'),
-                                             ('blue', 'u1')])
-    faces_cad = np.asarray(faces_cad, dtype=[('vertex_indices', 'i4', (3,))])
-    objdata = PlyData(
-        [PlyElement.describe(verts_cad, 'vertex', comments=['vertices']), PlyElement.describe(faces_cad, 'face')],
-        comments=['faces'])
-    savename = outdir + "/alignment.ply"
-    print("alignment saved", savename)
-    with open(savename, mode='wb') as f:
-        PlyData(objdata).write(f)
+            to_draw.extend([mesh, meshbox])
 
-    verts_bbox = np.asarray(verts_bbox, dtype=[('x', 'f4'), ('y', 'f4'), ('z', 'f4'), ('red', 'u1'), ('green', 'u1'),
-                                               ('blue', 'u1')])
-    faces_bbox = np.asarray(faces_bbox, dtype=[('vertex_indices', 'i4', (3,))])
-    objdata = PlyData(
-        [PlyElement.describe(verts_bbox, 'vertex', comments=['vertices']), PlyElement.describe(faces_bbox, 'face')],
-        comments=['faces'])
-    savename = outdir + "/bbox.ply"
-    print("alignment saved", savename)
-    with open(savename, mode='wb') as f:
-        PlyData(objdata).write(f)
+    o3d.visualization.draw_geometries(to_draw)
+
+    distances_to_cad_model = ray_casting_scene.compute_signed_distance(np.asarray(scan.points)).numpy()
+
+
 
 
