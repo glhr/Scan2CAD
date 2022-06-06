@@ -1,6 +1,6 @@
 {
-	"scannet" : "../../Assets/scannet-sample/",
-	"shapenet" : "../../Assets/shapenet-sample/",
+	"scannet" : "../../Assets/scannet_v2/scans/",
+	"shapenet" : "../../Assets/ShapeNetCore.v2/",
 	"scannet_voxelized" : "../../Assets/scannet-voxelized-sdf-sample/",
 	"shapenet_voxelized" : "../../Assets/shapenet-voxelized-df-sample/",
 	"centers" : "../../Assets/training-data/scan-centers-sample/",
